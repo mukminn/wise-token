@@ -70,7 +70,8 @@ export default function AbiContractUI() {
   const [chainOk, setChainOk] = useState<boolean | null>(null);
 
   const [contractAddress, setContractAddress] = useState<string>(
-    process.env.NEXT_PUBLIC_REWARD_CONTRACT_ADDRESS || ''
+    process.env.NEXT_PUBLIC_REWARD_CONTRACT_ADDRESS ||
+      '0x68F12a2fE1fBA2B5bfaED1eA2d844641b95b2dF0'
   );
 
   const [inputsState, setInputsState] = useState<Record<string, Record<string, string>>>({});
