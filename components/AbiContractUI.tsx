@@ -465,7 +465,20 @@ export default function AbiContractUI() {
   );
 
   const viewFns = functions.filter(isView);
-  const writeFns = functions.filter((f) => !isView(f));
+  const writeFns = useMemo(() => {
+    const items = functions.filter((f) => !isView(f));
+    const priorityOrder = ['claimDaily', 'registerReferral'];
+    const rank = (name: string) => {
+      const idx = priorityOrder.indexOf(name);
+      return idx === -1 ? Number.MAX_SAFE_INTEGER : idx;
+    };
+    return [...items].sort((a, b) => {
+      const ra = rank(a.name);
+      const rb = rank(b.name);
+      if (ra !== rb) return ra - rb;
+      return a.name.localeCompare(b.name);
+    });
+  }, [functions]);
 
   const renderFn = (fn: AbiFunction) => {
     const key = fn.name;
