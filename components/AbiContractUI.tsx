@@ -201,7 +201,7 @@ export default function AbiContractUI() {
 
         const args: unknown[] = [];
         for (const input of fnInputs) {
-          if (input.type === 'address' && (input.name === 'user' || input.name === 'referrer') && !currentInputs[input.name]) {
+          if (input.type === 'address' && input.name === 'user' && !currentInputs[input.name]) {
             if (walletAddress) {
               args.push(walletAddress);
               continue;
