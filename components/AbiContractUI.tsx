@@ -12,15 +12,17 @@ type AbiFunction = {
   inputs?: Array<{ name: string; type: string; internalType?: string }>;
 };
 
-function isAbiFunction(x: any): x is AbiFunction {
-  return x && x.type === 'function' && typeof x.name === 'string';
+function isAbiFunction(x: unknown): x is AbiFunction {
+  if (!x || typeof x !== 'object') return false;
+  const maybe = x as { type?: unknown; name?: unknown };
+  return maybe.type === 'function' && typeof maybe.name === 'string';
 }
 
 function isView(fn: AbiFunction) {
   return fn.stateMutability === 'view' || fn.stateMutability === 'pure';
 }
 
-function serializeResult(value: any): string {
+function serializeResult(value: unknown): string {
   try {
     return JSON.stringify(value, (_k, v) => (typeof v === 'bigint' ? v.toString() : v), 2);
   } catch {
@@ -32,7 +34,7 @@ function serializeResult(value: any): string {
   }
 }
 
-function coerceValue(type: string, raw: string): any {
+function coerceValue(type: string, raw: string): unknown {
   if (type === 'address') return raw;
   if (type === 'bool') return raw === 'true' || raw === '1';
   if (type === 'string') return raw;
@@ -45,7 +47,7 @@ function coerceValue(type: string, raw: string): any {
   return raw;
 }
 
-async function fetchSignature(address: string, taskType: string, proof?: any) {
+async function fetchSignature(address: string, taskType: string, proof?: unknown) {
   const res = await fetch('/api/swipe-signature', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -75,7 +77,16 @@ export default function AbiContractUI() {
   const [busyKey, setBusyKey] = useState<string | null>(null);
   const [resultByKey, setResultByKey] = useState<Record<string, string>>({});
 
-  const functions = useMemo(() => (SWIPE_REWARDS_ABI as any[]).filter(isAbiFunction), []);
+  const functions = useMemo(() => {
+    const abiItems = [...SWIPE_REWARDS_ABI] as unknown[];
+    return abiItems.filter(isAbiFunction);
+  }, []);
+
+  const getInjectedEthereum = useCallback((): unknown => {
+    if (typeof window === 'undefined') return undefined;
+    const w = window as unknown as { ethereum?: unknown };
+    return w.ethereum;
+  }, []);
 
   useEffect(() => {
     const contract = searchParams.get('contract');
@@ -99,12 +110,13 @@ export default function AbiContractUI() {
   }, [searchParams]);
 
   const connect = useCallback(async () => {
-    if (typeof window === 'undefined' || !(window as any).ethereum) {
+    const eth = getInjectedEthereum();
+    if (!eth) {
       setResultByKey((p) => ({ ...p, __wallet: 'No injected wallet found (install MetaMask).' }));
       return;
     }
 
-    const p = new ethers.BrowserProvider((window as any).ethereum);
+    const p = new ethers.BrowserProvider(eth as ethers.Eip1193Provider);
     await p.send('eth_requestAccounts', []);
 
     const s = await p.getSigner();
@@ -117,7 +129,7 @@ export default function AbiContractUI() {
 
     const n = await p.getNetwork();
     setChainOk(Number(n.chainId) === 8453);
-  }, []);
+  }, [getInjectedEthereum]);
 
   const disconnect = useCallback(() => {
     setProvider(null);
@@ -130,7 +142,11 @@ export default function AbiContractUI() {
   const contractRead = useMemo(() => {
     if (!provider || !contractAddress) return null;
     try {
-      return new ethers.Contract(contractAddress, SWIPE_REWARDS_ABI as any, provider);
+      return new ethers.Contract(
+        contractAddress,
+        SWIPE_REWARDS_ABI as unknown as ethers.InterfaceAbi,
+        provider
+      );
     } catch {
       return null;
     }
@@ -139,7 +155,11 @@ export default function AbiContractUI() {
   const contractWrite = useMemo(() => {
     if (!signer || !contractAddress) return null;
     try {
-      return new ethers.Contract(contractAddress, SWIPE_REWARDS_ABI as any, signer);
+      return new ethers.Contract(
+        contractAddress,
+        SWIPE_REWARDS_ABI as unknown as ethers.InterfaceAbi,
+        signer
+      );
     } catch {
       return null;
     }
@@ -178,7 +198,7 @@ export default function AbiContractUI() {
         const fnInputs = fn.inputs || [];
         const currentInputs = inputsState[key] || {};
 
-        const args: any[] = [];
+        const args: unknown[] = [];
         for (const input of fnInputs) {
           if (input.type === 'address' && (input.name === 'user' || input.name === 'referrer') && !currentInputs[input.name]) {
             if (walletAddress) {
@@ -191,7 +211,10 @@ export default function AbiContractUI() {
             if (!walletAddress) throw new Error('Wallet not connected');
             const taskType = currentInputs['taskType'] || currentInputs['achievementType'] || '';
             if (!taskType) throw new Error('taskType/achievementType is empty');
-            const proof = taskType === 'SHARE_CAST' && currentInputs['castHash'] ? { castHash: currentInputs['castHash'] } : undefined;
+            const proof =
+              taskType === 'SHARE_CAST' && currentInputs['castHash']
+                ? ({ castHash: currentInputs['castHash'] } as const)
+                : undefined;
             const sig = await fetchSignature(walletAddress, taskType, proof);
             args.push(sig);
             continue;
@@ -205,19 +228,22 @@ export default function AbiContractUI() {
           args.push(coerceValue(input.type, raw));
         }
 
+        const cAny = c as unknown as Record<string, (...a: unknown[]) => Promise<unknown>>;
+
         if (readOnly) {
-          const res = await (c as any)[fn.name](...args);
+          const res = await cAny[fn.name](...args);
           setResultByKey((p) => ({ ...p, [key]: serializeResult(res) }));
         } else {
-          const tx = await (c as any)[fn.name](...args);
+          const tx = (await cAny[fn.name](...args)) as unknown as { hash?: string; wait?: () => Promise<unknown> };
           setResultByKey((p) => ({ ...p, [key]: serializeResult({ hash: tx?.hash || tx }) }));
           if (tx?.wait) {
             const receipt = await tx.wait();
             setResultByKey((p) => ({ ...p, [key]: serializeResult(receipt) }));
           }
         }
-      } catch (e: any) {
-        setResultByKey((p) => ({ ...p, [key]: e?.message || String(e) }));
+      } catch (e: unknown) {
+        const msg = e instanceof Error ? e.message : String(e);
+        setResultByKey((p) => ({ ...p, [key]: msg }));
       } finally {
         setBusyKey(null);
       }
