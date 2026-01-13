@@ -76,6 +76,7 @@ export default function AbiContractUI() {
 
   const [inputsState, setInputsState] = useState<Record<string, Record<string, string>>>({
     claimAchievement: { achievementType: 'FOLLOW_SOCIALS' },
+    completeTask: { taskType: 'TRADING_VOLUME' },
   });
   const [busyKey, setBusyKey] = useState<string | null>(null);
   const [resultByKey, setResultByKey] = useState<Record<string, string>>({});
