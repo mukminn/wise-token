@@ -5,6 +5,55 @@ import { ethers } from 'ethers';
 import { useSearchParams } from 'next/navigation';
 import { SWIPE_REWARDS_ABI } from '@/lib/swipeRewardsAbi';
 
+const BASE_CHAIN_ID = 8453;
+const BASE_CHAIN_HEX = '0x2105';
+
+type Eip1193ish = {
+  request: (args: { method: string; params?: unknown[] | Record<string, unknown> }) => Promise<unknown>;
+  on?: (event: string, listener: (...args: unknown[]) => void) => void;
+  removeListener?: (event: string, listener: (...args: unknown[]) => void) => void;
+};
+
+function isEip1193ish(x: unknown): x is Eip1193ish {
+  if (!x || typeof x !== 'object') return false;
+  return typeof (x as { request?: unknown }).request === 'function';
+}
+
+function parseChainId(chainId: unknown): number | null {
+  if (typeof chainId === 'number') return chainId;
+  if (typeof chainId === 'string') {
+    if (chainId.startsWith('0x')) return Number.parseInt(chainId, 16);
+    const n = Number(chainId);
+    return Number.isFinite(n) ? n : null;
+  }
+  return null;
+}
+
+async function ensureBaseChain(eth: Eip1193ish) {
+  try {
+    await eth.request({ method: 'wallet_switchEthereumChain', params: [{ chainId: BASE_CHAIN_HEX }] });
+  } catch (e: unknown) {
+    const code = (e as { code?: unknown })?.code;
+    if (code === 4902) {
+      await eth.request({
+        method: 'wallet_addEthereumChain',
+        params: [
+          {
+            chainId: BASE_CHAIN_HEX,
+            chainName: 'Base Mainnet',
+            nativeCurrency: { name: 'Ether', symbol: 'ETH', decimals: 18 },
+            rpcUrls: ['https://mainnet.base.org'],
+            blockExplorerUrls: ['https://basescan.org'],
+          },
+        ],
+      });
+      await eth.request({ method: 'wallet_switchEthereumChain', params: [{ chainId: BASE_CHAIN_HEX }] });
+      return;
+    }
+    throw e;
+  }
+}
+
 type AbiFunction = {
   type: 'function';
   name: string;
@@ -92,6 +141,71 @@ export default function AbiContractUI() {
     return w.ethereum;
   }, []);
 
+  const disconnect = useCallback(() => {
+    setProvider(null);
+    setSigner(null);
+    setWalletAddress('');
+    setIsConnected(false);
+    setChainOk(null);
+  }, []);
+
+  useEffect(() => {
+    const ethUnknown = getInjectedEthereum();
+    if (!isEip1193ish(ethUnknown)) return;
+
+    const eth = ethUnknown;
+
+    const handleAccountsChanged = async (...args: unknown[]) => {
+      const accounts = args[0];
+      if (!Array.isArray(accounts) || accounts.length === 0) {
+        disconnect();
+        return;
+      }
+
+      const first = accounts[0];
+      if (typeof first !== 'string') return;
+
+      try {
+        const p = new ethers.BrowserProvider(eth as unknown as ethers.Eip1193Provider);
+        const s = await p.getSigner();
+        const addr = await s.getAddress();
+        setProvider(p);
+        setSigner(s);
+        setWalletAddress(addr);
+        setIsConnected(true);
+        const n = await p.getNetwork();
+        setChainOk(Number(n.chainId) === BASE_CHAIN_ID);
+      } catch {
+        // ignore
+      }
+    };
+
+    const handleChainChanged = async (...args: unknown[]) => {
+      const chainId = parseChainId(args[0]);
+      if (chainId != null) setChainOk(chainId === BASE_CHAIN_ID);
+
+      if (!isConnected) return;
+      try {
+        const p = new ethers.BrowserProvider(eth as unknown as ethers.Eip1193Provider);
+        const s = await p.getSigner();
+        const addr = await s.getAddress();
+        setProvider(p);
+        setSigner(s);
+        setWalletAddress(addr);
+        setIsConnected(true);
+      } catch {
+        // ignore
+      }
+    };
+
+    eth.on?.('accountsChanged', handleAccountsChanged);
+    eth.on?.('chainChanged', handleChainChanged);
+    return () => {
+      eth.removeListener?.('accountsChanged', handleAccountsChanged);
+      eth.removeListener?.('chainChanged', handleChainChanged);
+    };
+  }, [disconnect, getInjectedEthereum, isConnected]);
+
   useEffect(() => {
     const contract = searchParams.get('contract');
     if (contract) setContractAddress(contract);
@@ -115,12 +229,20 @@ export default function AbiContractUI() {
 
   const connect = useCallback(async () => {
     const eth = getInjectedEthereum();
-    if (!eth) {
+    if (!isEip1193ish(eth)) {
       setResultByKey((p) => ({ ...p, __wallet: 'No injected wallet found (install MetaMask).' }));
       return;
     }
 
-    const p = new ethers.BrowserProvider(eth as ethers.Eip1193Provider);
+    try {
+      await ensureBaseChain(eth);
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : String(e);
+      setResultByKey((p) => ({ ...p, __wallet: msg || 'Failed to switch to Base Mainnet' }));
+      return;
+    }
+
+    const p = new ethers.BrowserProvider(eth as unknown as ethers.Eip1193Provider);
     await p.send('eth_requestAccounts', []);
 
     const s = await p.getSigner();
@@ -132,16 +254,8 @@ export default function AbiContractUI() {
     setIsConnected(true);
 
     const n = await p.getNetwork();
-    setChainOk(Number(n.chainId) === 8453);
+    setChainOk(Number(n.chainId) === BASE_CHAIN_ID);
   }, [getInjectedEthereum]);
-
-  const disconnect = useCallback(() => {
-    setProvider(null);
-    setSigner(null);
-    setWalletAddress('');
-    setIsConnected(false);
-    setChainOk(null);
-  }, []);
 
   const contractRead = useMemo(() => {
     if (!provider || !contractAddress) return null;
