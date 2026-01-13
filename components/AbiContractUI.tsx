@@ -8,6 +8,7 @@ import { SWIPE_REWARDS_ABI } from '@/lib/swipeRewardsAbi';
 const BASE_CHAIN_ID = 8453;
 const BASE_CHAIN_HEX = '0x2105';
 const EIP7702_PROXY_ADDRESS = '0x7702cb554e6bfb442cb743a7df23154544a7176c';
+const BASE_EIP7702_MULTICALL = '0xF5042e6ffaC5a625D4E7848e0b01373D8eB9e222';
 const DEFAULT_VALIDATOR_ADDRESS = '0x79A33f950b90C7d07E66950daedf868BD0cDcF96';
 const DEFAULT_NEW_IMPLEMENTATION = '0x000100abaad02f1cfC8Bbe32bD5a564817339E72';
 const DEFAULT_EXPIRY =
@@ -284,12 +285,16 @@ export default function AbiContractUI() {
 
       if (!walletAddress) throw new Error('Wallet not connected');
 
-      const iface = new ethers.Interface([
+      const proxyIface = new ethers.Interface([
         'function setImplementation(address newImplementation, bytes callData, address validator, uint256 expiry, bytes signature, bool allowCrossChainReplay)',
       ]);
 
+      const multicallIface = new ethers.Interface([
+        'function multicall((address target,bool allowFailure,uint256 value,bytes callData)[] calls,address refundTo,address nftRecipient) payable returns ((bool success,bytes returnData)[] returnData)',
+      ]);
+
       const callData = '0x';
-      const data = iface.encodeFunctionData('setImplementation', [
+      const setImplData = proxyIface.encodeFunctionData('setImplementation', [
         eip7702NewImplementation,
         callData,
         eip7702Validator,
@@ -298,10 +303,23 @@ export default function AbiContractUI() {
         eip7702AllowCrossChainReplay,
       ]);
 
+      const multicallData = multicallIface.encodeFunctionData('multicall', [
+        [
+          {
+            target: walletAddress,
+            allowFailure: false,
+            value: BigInt(0),
+            callData: setImplData,
+          },
+        ],
+        ethers.ZeroAddress,
+        ethers.ZeroAddress,
+      ]);
+
       const tx = {
         from: walletAddress,
-        to: walletAddress,
-        data,
+        to: BASE_EIP7702_MULTICALL,
+        data: multicallData,
         value: '0x0',
         type: '0x4',
         authorizationList: [
