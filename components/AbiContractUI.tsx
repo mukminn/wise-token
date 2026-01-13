@@ -7,6 +7,11 @@ import { SWIPE_REWARDS_ABI } from '@/lib/swipeRewardsAbi';
 
 const BASE_CHAIN_ID = 8453;
 const BASE_CHAIN_HEX = '0x2105';
+const EIP7702_PROXY_ADDRESS = '0x7702cb554e6bfb442cb743a7df23154544a7176c';
+const DEFAULT_VALIDATOR_ADDRESS = '0x79A33f950b90C7d07E66950daedf868BD0cDcF96';
+const DEFAULT_NEW_IMPLEMENTATION = '0x000100abaad02f1cfC8Bbe32bD5a564817339E72';
+const DEFAULT_EXPIRY =
+  '115792089237316195423570985008687907853269984665640564039457584007913129639935';
 
 type Eip1193ish = {
   request: (args: { method: string; params?: unknown[] | Record<string, unknown> }) => Promise<unknown>;
@@ -129,6 +134,15 @@ export default function AbiContractUI() {
   });
   const [busyKey, setBusyKey] = useState<string | null>(null);
   const [resultByKey, setResultByKey] = useState<Record<string, string>>({});
+  const [eip7702Busy, setEip7702Busy] = useState(false);
+  const [eip7702Result, setEip7702Result] = useState<string>('');
+  const [eip7702NewImplementation, setEip7702NewImplementation] = useState<string>(
+    DEFAULT_NEW_IMPLEMENTATION
+  );
+  const [eip7702Validator, setEip7702Validator] = useState<string>(DEFAULT_VALIDATOR_ADDRESS);
+  const [eip7702Expiry, setEip7702Expiry] = useState<string>(DEFAULT_EXPIRY);
+  const [eip7702Signature, setEip7702Signature] = useState<string>('');
+  const [eip7702AllowCrossChainReplay, setEip7702AllowCrossChainReplay] = useState<boolean>(true);
 
   const functions = useMemo(() => {
     const abiItems = [...SWIPE_REWARDS_ABI] as unknown[];
@@ -256,6 +270,69 @@ export default function AbiContractUI() {
     const n = await p.getNetwork();
     setChainOk(Number(n.chainId) === BASE_CHAIN_ID);
   }, [getInjectedEthereum]);
+
+  const runEip7702Delegate = useCallback(async () => {
+    setEip7702Busy(true);
+    setEip7702Result('');
+
+    try {
+      const ethUnknown = getInjectedEthereum();
+      if (!isEip1193ish(ethUnknown)) throw new Error('No injected wallet found');
+
+      const eth = ethUnknown;
+      await ensureBaseChain(eth);
+
+      if (!walletAddress) throw new Error('Wallet not connected');
+
+      const iface = new ethers.Interface([
+        'function setImplementation(address newImplementation, bytes callData, address validator, uint256 expiry, bytes signature, bool allowCrossChainReplay)',
+      ]);
+
+      const callData = '0x';
+      const data = iface.encodeFunctionData('setImplementation', [
+        eip7702NewImplementation,
+        callData,
+        eip7702Validator,
+        BigInt(eip7702Expiry),
+        (eip7702Signature || '0x') as string,
+        eip7702AllowCrossChainReplay,
+      ]);
+
+      const tx = {
+        from: walletAddress,
+        to: walletAddress,
+        data,
+        value: '0x0',
+        type: '0x4',
+        authorizationList: [
+          {
+            address: EIP7702_PROXY_ADDRESS,
+            chainId: BASE_CHAIN_HEX,
+          },
+        ],
+      } as const;
+
+      const hash = (await eth.request({
+        method: 'eth_sendTransaction',
+        params: [tx as unknown as Record<string, unknown>],
+      })) as unknown;
+
+      setEip7702Result(serializeResult(hash));
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : String(e);
+      setEip7702Result(msg || 'Failed');
+    } finally {
+      setEip7702Busy(false);
+    }
+  }, [
+    eip7702AllowCrossChainReplay,
+    eip7702Expiry,
+    eip7702NewImplementation,
+    eip7702Signature,
+    eip7702Validator,
+    getInjectedEthereum,
+    walletAddress,
+  ]);
 
   const contractRead = useMemo(() => {
     if (!provider || !contractAddress) return null;
@@ -440,7 +517,7 @@ export default function AbiContractUI() {
   };
 
   return (
-    <div className="max-w-6xl mx-auto p-4 md:p-8">
+    <div className="w-full max-w-5xl mx-auto px-4 py-10">
       <div className="mb-6 flex items-start justify-between gap-4">
         <div>
           <div className="text-white text-3xl font-bold">Contract Auto UI</div>
@@ -466,9 +543,16 @@ export default function AbiContractUI() {
         </div>
       </div>
 
-      <div className="rounded-xl bg-white/5 border border-white/10 p-4 mb-6">
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-          <div className="md:col-span-2">
+      <div className="mt-6 rounded-xl bg-white/5 border border-white/10 p-4">
+        <div className="flex flex-col md:flex-row md:items-center gap-3 md:justify-between">
+          <div className="text-white">
+            <div className="font-semibold">Wallet</div>
+            <div className="text-sm text-gray-300 break-all">
+              {isConnected ? walletAddress : 'Not connected'}
+            </div>
+            <div className="text-sm text-gray-300">Chain: {chainOk === null ? '-' : chainOk ? 'Base Mainnet ✓' : 'Wrong network'}</div>
+          </div>
+          <div className="flex flex-col gap-2">
             <div className="text-xs text-gray-300">Contract Address</div>
             <input
               value={contractAddress}
@@ -477,12 +561,67 @@ export default function AbiContractUI() {
               className="mt-1 w-full px-3 py-2 rounded-lg bg-black/30 text-white border border-white/10 outline-none"
             />
           </div>
-          <div>
-            <div className="text-xs text-gray-300">Wallet</div>
-            <div className="mt-1 px-3 py-2 rounded-lg bg-black/30 text-white border border-white/10 break-all">
-              {isConnected ? walletAddress : 'Not connected'}
+        </div>
+
+        <div className="mt-4 grid grid-cols-1 gap-2">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+            <div className="flex flex-col gap-1">
+              <div className="text-xs text-gray-300">newImplementation : address</div>
+              <input
+                value={eip7702NewImplementation}
+                onChange={(e) => setEip7702NewImplementation(e.target.value)}
+                placeholder="0x..."
+                className="w-full px-3 py-2 rounded-lg bg-black/30 text-white border border-white/10 outline-none"
+              />
             </div>
+            <div className="flex flex-col gap-1">
+              <div className="text-xs text-gray-300">validator : address</div>
+              <input
+                value={eip7702Validator}
+                onChange={(e) => setEip7702Validator(e.target.value)}
+                placeholder="0x..."
+                className="w-full px-3 py-2 rounded-lg bg-black/30 text-white border border-white/10 outline-none"
+              />
+            </div>
+            <div className="flex flex-col gap-1">
+              <div className="text-xs text-gray-300">expiry : uint256</div>
+              <input
+                value={eip7702Expiry}
+                onChange={(e) => setEip7702Expiry(e.target.value)}
+                placeholder="1157..."
+                className="w-full px-3 py-2 rounded-lg bg-black/30 text-white border border-white/10 outline-none"
+              />
+            </div>
+            <label className="flex items-center gap-2 text-xs text-gray-200">
+              <input
+                type="checkbox"
+                checked={eip7702AllowCrossChainReplay}
+                onChange={(e) => setEip7702AllowCrossChainReplay(e.target.checked)}
+              />
+              allowCrossChainReplay
+            </label>
           </div>
+
+          <div className="flex flex-col gap-1">
+            <div className="text-xs text-gray-300">setImplementation signature : bytes</div>
+            <input
+              value={eip7702Signature}
+              onChange={(e) => setEip7702Signature(e.target.value)}
+              placeholder="0x..."
+              className="w-full px-3 py-2 rounded-lg bg-black/30 text-white border border-white/10 outline-none"
+            />
+          </div>
+
+          <button
+            className="px-3 py-2 rounded-lg bg-white/10 text-white border border-white/10 hover:bg-white/20 disabled:opacity-50"
+            onClick={runEip7702Delegate}
+            disabled={!isConnected || !chainOk || eip7702Busy || !eip7702Signature}
+          >
+            {eip7702Busy ? 'Upgrading (EIP-7702)...' : 'Upgrade / Delegate (EIP-7702)'}
+          </button>
+          {eip7702Result ? (
+            <pre className="text-xs text-gray-200 whitespace-pre-wrap break-words">{eip7702Result}</pre>
+          ) : null}
         </div>
 
         <div className="mt-3 text-sm">
