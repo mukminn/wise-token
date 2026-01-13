@@ -74,7 +74,9 @@ export default function AbiContractUI() {
       '0x68F12a2fE1fBA2B5bfaED1eA2d844641b95b2dF0'
   );
 
-  const [inputsState, setInputsState] = useState<Record<string, Record<string, string>>>({});
+  const [inputsState, setInputsState] = useState<Record<string, Record<string, string>>>({
+    claimAchievement: { achievementType: 'FOLLOW_SOCIALS' },
+  });
   const [busyKey, setBusyKey] = useState<string | null>(null);
   const [resultByKey, setResultByKey] = useState<Record<string, string>>({});
 
