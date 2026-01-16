@@ -152,7 +152,21 @@ export default function AbiContractUI() {
 
   const getInjectedEthereum = useCallback((): unknown => {
     if (typeof window === 'undefined') return undefined;
-    const w = window as unknown as { ethereum?: unknown };
+    const w = window as unknown as {
+      ethereum?: unknown;
+      okxwallet?: { ethereum?: unknown } | unknown;
+    };
+
+    if (isEip1193ish(w.ethereum)) return w.ethereum;
+
+    const okx = w.okxwallet;
+    if (okx && typeof okx === 'object') {
+      const okxEth = (okx as { ethereum?: unknown }).ethereum;
+      if (isEip1193ish(okxEth)) return okxEth;
+    }
+
+    if (isEip1193ish(okx)) return okx;
+
     return w.ethereum;
   }, []);
 
@@ -245,7 +259,10 @@ export default function AbiContractUI() {
   const connect = useCallback(async () => {
     const eth = getInjectedEthereum();
     if (!isEip1193ish(eth)) {
-      setResultByKey((p) => ({ ...p, __wallet: 'No injected wallet found (install MetaMask).' }));
+      setResultByKey((p) => ({
+        ...p,
+        __wallet: 'No injected wallet found. Open this page inside a wallet browser (OKX/MetaMask).',
+      }));
       return;
     }
 
